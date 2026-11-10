@@ -2,6 +2,9 @@ import express from "express";
 import fetch from "node-fetch";
 import dotenv from "dotenv";
 import { Redis } from "@upstash/redis";
+import cookieParser from "cookie-parser";
+import rateLimit from "express-rate-limit";
+import crypto from "node:crypto";
 dotenv.config();
 
 const {
@@ -21,6 +24,24 @@ const {
 
 const app = express();
 app.set("trust proxy", true); // needed to read the real client IP behind Render's proxy
+app.use(cookieParser());
+
+// Shared limiter: 20 requests per 10 minutes per IP, applied to both routes
+const verifyLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    res.status(429).send(
+      renderPage({
+        status: "error",
+        title: "Too many attempts",
+        message: "You're doing that too often. Wait a few minutes and try again.",
+      })
+    );
+  },
+});
 
 const redis = new Redis({
   url: UPSTASH_REDIS_REST_URL,
@@ -164,18 +185,30 @@ function renderPage({ status, title, message }) {
 }
 
 // Step 1: send member here to start verification
-app.get("/verify", (req, res) => {
+app.get("/verify", verifyLimiter, (req, res) => {
+  const state = crypto.randomBytes(16).toString("hex");
+  res.cookie("oauth_state", state, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    maxAge: 5 * 60 * 1000, // 5 minutes to complete the flow
+  });
+
   const url = new URL("https://discord.com/oauth2/authorize");
   url.searchParams.set("client_id", CLIENT_ID);
   url.searchParams.set("redirect_uri", REDIRECT_URI);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", "identify guilds.join");
+  url.searchParams.set("state", state);
   res.redirect(url.toString());
 });
 
 // Step 2: Discord redirects back here with a code
-app.get("/callback", async (req, res) => {
-  const code = req.query.code;
+app.get("/callback", verifyLimiter, async (req, res) => {
+  const { code, state } = req.query;
+  const savedState = req.cookies.oauth_state;
+  res.clearCookie("oauth_state");
+
   if (!code)
     return res.status(400).send(
       renderPage({
@@ -184,6 +217,16 @@ app.get("/callback", async (req, res) => {
         message: "This link is invalid. Start over from the #verify channel.",
       })
     );
+
+  if (!state || !savedState || state !== savedState) {
+    return res.status(400).send(
+      renderPage({
+        status: "error",
+        title: "Invalid request",
+        message: "This verification link expired or was tampered with. Start over from #verify.",
+      })
+    );
+  }
 
   try {
     // Exchange code for access token
