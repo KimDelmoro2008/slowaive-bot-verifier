@@ -37,6 +37,17 @@ async function recordIp(ip, discordId) {
   await redis.sadd(`ip:${ip}`, discordId);
 }
 
+// Readable record per user for the Data Browser: username, ID, IP, timestamp
+async function recordUser(user, ip) {
+  await redis.hset(`user:${user.id}`, {
+    username: user.username,
+    discriminator: user.discriminator || "0",
+    userId: user.id,
+    ip,
+    verifiedAt: new Date().toISOString(),
+  });
+}
+
 function getClientIp(req) {
   const fwd = req.headers["x-forwarded-for"];
   return fwd ? fwd.split(",")[0].trim() : req.socket.remoteAddress;
@@ -226,6 +237,7 @@ app.get("/callback", async (req, res) => {
     const isSuspectedAlt = existing.length > 0 && !existing.includes(user.id);
 
     await recordIp(ip, user.id);
+    await recordUser(user, ip);
 
     if (isSuspectedAlt) {
       await logToMod(
