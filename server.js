@@ -15,6 +15,91 @@ const {
 
 const app = express();
 
+function renderPage({ status, title, message }) {
+  const accent = status === "ok" ? "#57f287" : status === "warn" ? "#faa61a" : "#ed4245";
+  const icon = status === "ok" ? "✓" : status === "warn" ? "!" : "×";
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${title}</title>
+<style>
+  :root {
+    --bg: #313338;
+    --card: #2b2d31;
+    --text: #f2f3f5;
+    --muted: #b5bac1;
+    --accent: ${accent};
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f2f3f5;
+      --card: #ffffff;
+      --text: #060607;
+      --muted: #5c5e66;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "gg sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    background: var(--card);
+    border-radius: 12px;
+    padding: 40px 36px;
+    max-width: 380px;
+    width: 100%;
+    text-align: center;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.24);
+  }
+  .icon {
+    width: 56px;
+    height: 56px;
+    margin: 0 auto 20px;
+    border-radius: 50%;
+    border: 3px solid var(--accent);
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+    font-weight: 700;
+  }
+  h1 {
+    font-size: 18px;
+    margin: 0 0 8px;
+  }
+  p {
+    font-size: 14px;
+    color: var(--muted);
+    margin: 0;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">${icon}</div>
+    <h1>${title}</h1>
+    <p>${message}</p>
+  </div>
+</body>
+</html>`;
+}
+
 // Step 1: send member here to start verification
 app.get("/verify", (req, res) => {
   const url = new URL("https://discord.com/oauth2/authorize");
@@ -28,7 +113,14 @@ app.get("/verify", (req, res) => {
 // Step 2: Discord redirects back here with a code
 app.get("/callback", async (req, res) => {
   const code = req.query.code;
-  if (!code) return res.status(400).send("Missing code.");
+  if (!code)
+    return res.status(400).send(
+      renderPage({
+        status: "error",
+        title: "Missing code",
+        message: "This link is invalid. Start over from the #verify channel.",
+      })
+    );
 
   try {
     // Exchange code for access token
@@ -46,7 +138,13 @@ app.get("/callback", async (req, res) => {
     const tokenData = await tokenRes.json();
     if (!tokenData.access_token) {
       console.error(tokenData);
-      return res.status(400).send("Token exchange failed.");
+      return res.status(400).send(
+        renderPage({
+          status: "error",
+          title: "Verification failed",
+          message: "Could not exchange the authorization code. Try again from #verify.",
+        })
+      );
     }
 
     // Get the user's identity
@@ -80,13 +178,31 @@ app.get("/callback", async (req, res) => {
     if (!roleRes.ok) {
       const err = await roleRes.text();
       console.error("Role assign failed:", err);
-      return res.status(500).send("Verified, but role assignment failed.");
+      return res.status(500).send(
+        renderPage({
+          status: "warn",
+          title: "Almost there",
+          message: "You're verified, but the role couldn't be assigned. Ping a mod for help.",
+        })
+      );
     }
 
-    res.send("Verification complete. You can close this tab.");
+    res.send(
+      renderPage({
+        status: "ok",
+        title: "Verification complete",
+        message: "You're all set. You can close this tab and head back to Discord.",
+      })
+    );
   } catch (err) {
     console.error(err);
-    res.status(500).send("Something went wrong.");
+    res.status(500).send(
+      renderPage({
+        status: "error",
+        title: "Something went wrong",
+        message: "An unexpected error occurred. Try again from #verify.",
+      })
+    );
   }
 });
 
