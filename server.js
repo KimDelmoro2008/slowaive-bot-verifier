@@ -1,7 +1,7 @@
 import express from "express";
 import fetch from "node-fetch";
 import dotenv from "dotenv";
-import fs from "fs/promises";
+import { Redis } from "@upstash/redis";
 dotenv.config();
 
 const {
@@ -15,23 +15,26 @@ const {
   MIN_ACCOUNT_AGE_DAYS = "7",
   ALT_FLAG_ROLE_ID = "",
   MOD_LOG_CHANNEL_ID = "",
+  UPSTASH_REDIS_REST_URL,
+  UPSTASH_REDIS_REST_TOKEN,
 } = process.env;
 
 const app = express();
 app.set("trust proxy", true); // needed to read the real client IP behind Render's proxy
 
-const DATA_FILE = "./verify-data.json";
+const redis = new Redis({
+  url: UPSTASH_REDIS_REST_URL,
+  token: UPSTASH_REDIS_REST_TOKEN,
+});
 
-async function loadData() {
-  try {
-    return JSON.parse(await fs.readFile(DATA_FILE, "utf8"));
-  } catch {
-    return { byIp: {} }; // { "1.2.3.4": ["discordId1", "discordId2"] }
-  }
+// Discord IDs already verified from this IP, excluding the current user
+async function getIpHistory(ip) {
+  const ids = await redis.smembers(`ip:${ip}`);
+  return ids || [];
 }
 
-async function saveData(data) {
-  await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
+async function recordIp(ip, discordId) {
+  await redis.sadd(`ip:${ip}`, discordId);
 }
 
 function getClientIp(req) {
@@ -219,17 +222,14 @@ app.get("/callback", async (req, res) => {
 
     // --- Anti-alt check 2: duplicate IP ---
     const ip = getClientIp(req);
-    const data = await loadData();
-    const existing = data.byIp[ip] || [];
+    const existing = await getIpHistory(ip);
     const isSuspectedAlt = existing.length > 0 && !existing.includes(user.id);
 
-    if (!existing.includes(user.id)) existing.push(user.id);
-    data.byIp[ip] = existing;
-    await saveData(data);
+    await recordIp(ip, user.id);
 
     if (isSuspectedAlt) {
       await logToMod(
-        `⚠️ Possible alt: **${user.username}** (${user.id}) shares an IP with ${existing.length - 1} other verified account(s): ${existing.filter((id) => id !== user.id).join(", ")}`
+        `⚠️ Possible alt: **${user.username}** (${user.id}) shares an IP with ${existing.length} other verified account(s): ${existing.join(", ")}`
       );
     }
 
