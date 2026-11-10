@@ -1,6 +1,7 @@
 import express from "express";
 import fetch from "node-fetch";
 import dotenv from "dotenv";
+import fs from "fs/promises";
 dotenv.config();
 
 const {
@@ -11,9 +12,57 @@ const {
   VERIFIED_ROLE_ID,
   REDIRECT_URI,
   PORT = 3000,
+  MIN_ACCOUNT_AGE_DAYS = "7",
+  ALT_FLAG_ROLE_ID = "",
+  MOD_LOG_CHANNEL_ID = "",
 } = process.env;
 
 const app = express();
+app.set("trust proxy", true); // needed to read the real client IP behind Render's proxy
+
+const DATA_FILE = "./verify-data.json";
+
+async function loadData() {
+  try {
+    return JSON.parse(await fs.readFile(DATA_FILE, "utf8"));
+  } catch {
+    return { byIp: {} }; // { "1.2.3.4": ["discordId1", "discordId2"] }
+  }
+}
+
+async function saveData(data) {
+  await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+function getClientIp(req) {
+  const fwd = req.headers["x-forwarded-for"];
+  return fwd ? fwd.split(",")[0].trim() : req.socket.remoteAddress;
+}
+
+function accountAgeDays(discordId) {
+  // Discord snowflake -> timestamp
+  const createdAt = Number(BigInt(discordId) >> 22n) + 1420070400000;
+  return (Date.now() - createdAt) / (1000 * 60 * 60 * 24);
+}
+
+async function logToMod(message) {
+  if (!MOD_LOG_CHANNEL_ID) return;
+  try {
+    await fetch(
+      `https://discord.com/api/channels/${MOD_LOG_CHANNEL_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bot ${BOT_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ content: message }),
+      }
+    );
+  } catch (err) {
+    console.error("Mod log failed:", err);
+  }
+}
 
 function renderPage({ status, title, message }) {
   const accent = status === "ok" ? "#57f287" : status === "warn" ? "#faa61a" : "#ed4245";
@@ -153,6 +202,37 @@ app.get("/callback", async (req, res) => {
     });
     const user = await userRes.json();
 
+    // --- Anti-alt check 1: account age ---
+    const ageDays = accountAgeDays(user.id);
+    if (ageDays < Number(MIN_ACCOUNT_AGE_DAYS)) {
+      await logToMod(
+        `🚫 Blocked verification: **${user.username}** (${user.id}) — account is ${ageDays.toFixed(1)} days old (min ${MIN_ACCOUNT_AGE_DAYS}).`
+      );
+      return res.status(403).send(
+        renderPage({
+          status: "error",
+          title: "Account too new",
+          message: `Your Discord account must be at least ${MIN_ACCOUNT_AGE_DAYS} days old to verify here.`,
+        })
+      );
+    }
+
+    // --- Anti-alt check 2: duplicate IP ---
+    const ip = getClientIp(req);
+    const data = await loadData();
+    const existing = data.byIp[ip] || [];
+    const isSuspectedAlt = existing.length > 0 && !existing.includes(user.id);
+
+    if (!existing.includes(user.id)) existing.push(user.id);
+    data.byIp[ip] = existing;
+    await saveData(data);
+
+    if (isSuspectedAlt) {
+      await logToMod(
+        `⚠️ Possible alt: **${user.username}** (${user.id}) shares an IP with ${existing.length - 1} other verified account(s): ${existing.filter((id) => id !== user.id).join(", ")}`
+      );
+    }
+
     // Add them to the guild if not already a member (requires guilds.join scope)
     await fetch(
       `https://discord.com/api/guilds/${GUILD_ID}/members/${user.id}`,
@@ -184,6 +264,14 @@ app.get("/callback", async (req, res) => {
           title: "Almost there",
           message: "You're verified, but the role couldn't be assigned. Ping a mod for help.",
         })
+      );
+    }
+
+    // Tag suspected alts with a separate role for mods to review
+    if (isSuspectedAlt && ALT_FLAG_ROLE_ID) {
+      await fetch(
+        `https://discord.com/api/guilds/${GUILD_ID}/members/${user.id}/roles/${ALT_FLAG_ROLE_ID}`,
+        { method: "PUT", headers: { Authorization: `Bot ${BOT_TOKEN}` } }
       );
     }
 
