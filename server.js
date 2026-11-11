@@ -99,23 +99,49 @@ async function logToMod(message) {
   }
 }
 
-function renderPage({ status, title, message }) {
-  const accent = status === "ok" ? "#57f287" : status === "warn" ? "#faa61a" : "#ed4245";
-  const icon = status === "ok" ? "✓" : status === "warn" ? "!" : "×";
+function renderPage({ status, title, message, guildInviteUrl }) {
+  const accent =
+    status === "ok" ? "#23a55a" : status === "warn" ? "#f0b232" : "#f23f42";
+
+  // Success gets a drawn checkmark; everything else gets a static glyph.
+  // Keeping the glyph set small and semantic rather than decorative icon soup.
+  const iconMarkup =
+    status === "ok"
+      ? `<svg class="icon-svg" viewBox="0 0 52 52" aria-hidden="true">
+          <circle class="icon-ring" cx="26" cy="26" r="23" fill="none" stroke-width="3"/>
+          <path class="icon-check" fill="none" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" d="M15 27l7 7 16-16"/>
+        </svg>`
+      : status === "warn"
+      ? `<svg class="icon-svg" viewBox="0 0 52 52" aria-hidden="true">
+          <circle class="icon-ring" cx="26" cy="26" r="23" fill="none" stroke-width="3"/>
+          <line x1="26" y1="16" x2="26" y2="29" stroke-width="4" stroke-linecap="round"/>
+          <circle cx="26" cy="36" r="2.4" fill="currentColor" stroke="none"/>
+        </svg>`
+      : `<svg class="icon-svg" viewBox="0 0 52 52" aria-hidden="true">
+          <circle class="icon-ring" cx="26" cy="26" r="23" fill="none" stroke-width="3"/>
+          <path stroke-width="4" stroke-linecap="round" d="M18 18l16 16M34 18L18 34"/>
+        </svg>`;
+
+  const action =
+    status === "ok"
+      ? `<a class="btn" href="${guildInviteUrl || "discord://"}">Return to Discord</a>`
+      : "";
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>${title}</title>
 <style>
   :root {
     --bg: #313338;
     --card: #2b2d31;
     --text: #f2f3f5;
-    --muted: #b5bac1;
+    --muted: #949ba4;
     --accent: ${accent};
+    --btn-bg: #4e5058;
+    --btn-bg-hover: #6d6f78;
     color-scheme: dark;
   }
   @media (prefers-color-scheme: light) {
@@ -124,6 +150,8 @@ function renderPage({ status, title, message }) {
       --card: #ffffff;
       --text: #060607;
       --muted: #5c5e66;
+      --btn-bg: #e3e5e8;
+      --btn-bg-hover: #d4d7dc;
     }
   }
   * { box-sizing: border-box; }
@@ -139,47 +167,80 @@ function renderPage({ status, title, message }) {
     align-items: center;
     justify-content: center;
     padding: 24px;
+    padding-top: calc(24px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
   }
   .card {
     background: var(--card);
-    border-radius: 12px;
-    padding: 40px 36px;
-    max-width: 380px;
+    border-radius: 8px;
+    padding: 40px 32px 32px;
+    max-width: 360px;
     width: 100%;
     text-align: center;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.24);
+    box-shadow: 0 8px 16px rgba(0,0,0,0.16);
   }
-  .icon {
-    width: 56px;
-    height: 56px;
-    margin: 0 auto 20px;
-    border-radius: 50%;
-    border: 3px solid var(--accent);
+  .icon-svg {
+    width: 52px;
+    height: 52px;
+    margin: 0 0 20px;
     color: var(--accent);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 26px;
-    font-weight: 700;
+    overflow: visible;
+  }
+  .icon-ring {
+    stroke: var(--accent);
+    stroke-dasharray: 145;
+    stroke-dashoffset: 145;
+    animation: ring 0.5s ease-out forwards;
+  }
+  .icon-check {
+    stroke: var(--accent);
+    stroke-dasharray: 34;
+    stroke-dashoffset: 34;
+    animation: check 0.35s ease-out 0.4s forwards;
+  }
+  @keyframes ring { to { stroke-dashoffset: 0; } }
+  @keyframes check { to { stroke-dashoffset: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .icon-ring, .icon-check { animation: none; stroke-dashoffset: 0; }
   }
   h1 {
-    font-size: 18px;
+    font-size: 20px;
+    font-weight: 700;
     margin: 0 0 8px;
+    line-height: 1.3;
   }
   p {
-    font-size: 14px;
+    font-size: 15px;
     color: var(--muted);
     margin: 0;
     line-height: 1.5;
   }
+  .btn {
+    display: inline-block;
+    margin-top: 24px;
+    padding: 10px 20px;
+    border-radius: 4px;
+    background: var(--btn-bg);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 500;
+    transition: background 0.15s ease;
+  }
+  .btn:hover { background: var(--btn-bg-hover); }
+  .btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
 </style>
 </head>
 <body>
-  <div class="card">
-    <div class="icon">${icon}</div>
+  <main class="card" role="status" aria-live="polite">
+    ${iconMarkup}
     <h1>${title}</h1>
     <p>${message}</p>
-  </div>
+    ${action}
+  </main>
 </body>
 </html>`;
 }
