@@ -58,15 +58,21 @@ async function recordIp(ip, discordId) {
   await redis.sadd(`ip:${ip}`, discordId);
 }
 
-// Readable record per user for the Data Browser: username, ID, IP, timestamp
-async function recordUser(user, ip) {
-  await redis.hset(`user:${user.id}`, {
-    username: user.username,
-    discriminator: user.discriminator || "0",
-    userId: user.id,
-    ip,
-    verifiedAt: new Date().toISOString(),
-  });
+// Cache of the latest known username per Discord ID, so alt links can show a name.
+async function getUsername(id) {
+  const name = await redis.get(`uname:${id}`);
+  return name || "Unknown";
+}
+async function setUsername(id, username) {
+  await redis.set(`uname:${id}`, username);
+}
+
+// alts:<userId> is a hash of { otherUserId: otherUsername } — linked both ways
+// whenever two accounts share an IP. Browsable directly per-user in the Data Browser.
+async function linkAlt(userId, username, otherId) {
+  const otherName = await getUsername(otherId);
+  await redis.hset(`alts:${userId}`, { [otherId]: otherName });
+  await redis.hset(`alts:${otherId}`, { [userId]: username });
 }
 
 function getClientIp(req) {
@@ -340,8 +346,11 @@ app.get("/callback", verifyLimiter, async (req, res) => {
     const existing = await getIpHistory(ip);
     const isSuspectedAlt = existing.length > 0 && !existing.includes(user.id);
 
+    await setUsername(user.id, user.username);
+    for (const otherId of existing) {
+      await linkAlt(user.id, user.username, otherId);
+    }
     await recordIp(ip, user.id);
-    await recordUser(user, ip);
 
     if (isSuspectedAlt) {
       await logToMod(
